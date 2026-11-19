@@ -1,7 +1,7 @@
 const ORIGIN = 'https://yuyang990328.github.io';
 const MODEL = 'gpt-5.6-sol';
 const API_URL = 'https://www.78code.cc/v1/chat/completions';
-const SYSTEM = '你是人类摆烂管理局审批官。根据用户提供的申请理由和时长认真审核，不能默认批准。文风为一本正经、荒诞有趣的中文行政批复，内容要紧扣理由，不编造用户经历、身份或事实，不使用外星人设定。只输出JSON对象，包含status(批准/附条件批准/驳回)、score(0-100整数)、authorized(核准时长，驳回为未核准)、comment(60-130字)、dept(审查部门，不超过10字)、title(荣誉称号，不超过12字)。结果和批复必须一致。';
+const SYSTEM = '你是人类摆烂管理局的严苛审批官。先评价申请理由是否充分、是否有实际休息必要，再判断申请时长是否合理。不得为了幽默而一律批准；仅仅想偷懒、普通饭困、短暂疲惫等通常不足以支持一整天休息，更不足以支持三天或一周。不要编造用户未提供的事实。返回严格JSON对象：status(批准/附条件批准/驳回)、score(0-100整数)、authorized(核准时长，驳回填未核准)、comment(60-130字中文，严肃公文语气且幽默，必须符合审核结论)、dept(10字内)、title(12字内)。只有申请理由充分且完整核准所申请时长时才能批准。部分时长只能附条件批准。';
 const json = (data,status=200,origin=ORIGIN)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':origin,'Vary':'Origin','Cache-Control':'no-store'}});
 export default {
  async fetch(request,env){
@@ -29,7 +29,22 @@ export default {
    const match=raw.match(/\{[\s\S]*\}/);if(!match)return json({error:'AI 返回格式错误'},502);
    const v=JSON.parse(match[0]);
    if(!['批准','附条件批准','驳回'].includes(v.status)||!Number.isFinite(Number(v.score))||typeof v.comment!=='string')return json({error:'AI 审批字段无效'},502);
-   return json({status:v.status,score:Math.max(0,Math.min(100,Math.round(Number(v.score)))),authorized:v.status==='驳回'?'未核准':String(v.authorized||duration).slice(0,30),comment:v.comment.slice(0,500),dept:String(v.dept||'综合审批办公室').slice(0,30),title:String(v.title||'摆烂申请人').slice(0,30)});
+   // Normalize the model's decision: partial grants never count as full approval.
+   const requested=duration;
+   const granted=String(v.authorized||'未核准').trim().slice(0,30);
+   const normalize=t=>t.replace(/\\s+/g,'').replace(/仅限|连续|起步|整整|休息|核准|批准|准予|一天|1天/g,m=>m==='一天'||m==='1天'?'今天':'').replace(/三个?天|3天/g,'三天').replace(/七天|7天/g,'一周');
+   const full=normalize(granted)===normalize(requested);
+   let score=Math.max(0,Math.min(100,Math.round(Number(v.score))));
+   let status=v.status;
+   if(status==='批准'&&!full)status=granted==='未核准'?'驳回':'附条件批准';
+   if(status==='附条件批准'&&full)status='附条件批准';
+   if(status==='驳回')score=Math.min(score,44);
+   else if(status==='附条件批准')score=Math.max(45,Math.min(score,74));
+   else if(score<75){status='附条件批准';score=Math.max(45,score)}
+   // If the model's text conflicts with normalized outcome, ask for a consistent official notice.
+   let comment=v.comment.slice(0,500);
+   if(status!==v.status){comment=status==='驳回'?'经审核，申请事由尚不足以支持所申请的休息时长，本局决定暂不核准。请补充更充分的材料后申请复审。':'经审核，申请事由可以支持适度休息，但不足以核准全部申请时长。本局仅同意'+granted+'，超出部分不予批准。'+comment.replace(/批准(全部|本次|申请|休息|摆烂)/g,'考虑$1');}
+   return json({status,score,authorized:status==='驳回'?'未核准':granted,comment,dept:String(v.dept||'综合审批办公室').slice(0,30),title:String(v.title||'摆烂申请人').slice(0,30)});
   }catch(e){return json({error:e.name==='AbortError'?'AI 请求超时':'AI 审批服务暂不可用'},502)}
  }
 };
